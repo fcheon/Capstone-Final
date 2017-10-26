@@ -1,0 +1,349 @@
+---
+title: "Capstone Project"
+author: "Frank Cheon"
+date: "October 25, 2017"
+output:
+  html_document:
+    code_folding: hide
+    fig_height: 4.5
+    fig_width: 7.5
+    highlight: espresso
+    number_sections: yes
+    theme: cerulean
+    toc: yes
+---
+
+## Analysis of Home Mortgages in NY
+
+#Introduction
+This dataset covers all mortgage loan decisions for New York, USA.
+
+#Sample Story
+A client wishes to buy a home, but they do not have full cash-in-hand. So the client must apply for a mortgage loan. 
+They proceed to tell the bank all their financial matters and the home that they wish to purchase. Once the bank makes its decision to approve the loan, the client will sign all necessary papers to close the deal. This is called **Loan Origination**.
+
+#Understanding the Data
+The data can be grouped into 5 major categories:
+
+* **Loan** - Lien status, any action taken on the loan, purpose for the loan and type of loan applied
+
+* **Applicant** - The demographic for the applicant and any co-applicant is included, such as their gender, race and ethnicity.
+
+* **Property Type** - Is the loan for a 1-4 family home, a multifamily home (apartment/condo building) and manufactured housing. This data also includes if the applicant will be living in the building.
+
+* **Location** - The region/metro area informatics within state of New York. Where the building in question is located.
+
+* **Lender** - Any federal agency or banking institution the applicant is working with.
+
+#Data Analysis
+Let us dive into exploring the acquired dataset and see what we can understand.
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(caTools)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+
+rm(list=ls())
+
+fillColor = "#FFA07A"
+fillColor2 = "#666666"
+
+mortgage <- read_csv("C:/Home mortgage.csv")
+```
+##Loan application and action taken analysis
+
+###Action Taken by percentage
+```{r, message=FALSE, warning=FALSE}
+mortgage_refine <- mortgage %>% 
+    subset(action_taken_name != "File closed for incompleteness") %>%
+    subset(action_taken_name != "Application withdrawn by applicant")
+
+MortgageActions <- mortgage_refine %>% group_by(action_taken_name) %>%
+  summarise(SummaryActionTaken = n())%>%
+  mutate(PercentageActionTaken = round(SummaryActionTaken/sum(SummaryActionTaken)*100))
+
+ggplot(MortgageActions, aes(x=reorder(action_taken_name, SummaryActionTaken), y= SummaryActionTaken))+
+  geom_bar(stat="identity", col="white", fill = fillColor) +
+  geom_text(aes(x=action_taken_name, y=1, 
+                label = paste(PercentageActionTaken,"%", sep="")), 
+            hjust=-.1, vjust=.5, size=3, col="black", fontface = "bold") +
+  labs(x= "Action Taken", y="Percentage of total Action Taken",  
+       title = "Action Taken For Loan Applications") +
+  scale_y_continuous()+
+  coord_flip()
+```
+
+The plot shows that approx. **~59%** of the loan applications were "Loan Originated", which shows they were approved and closing the deal.
+
+
+
+
+##Gender comaprison
+```{r, message=FALSE, warning=FALSE}
+MortgageGender <- mortgage_refine %>%
+  group_by(applicant_sex_name) %>%
+  summarise(SummaryGender = n()) %>%
+  mutate(PercentGender= round(SummaryGender/sum(SummaryGender)*100)) %>%
+  arrange(desc(SummaryGender)) %>%
+  subset(applicant_sex_name != "Not applicable") %>%
+  subset(applicant_sex_name != "Information not provided by applicant in mail, Internet, or telephone application")
+
+ggplot(MortgageGender, aes(x= applicant_sex_name, y= SummaryGender)) +
+  geom_bar(stat="identity", col="white", fill = fillColor) +
+  geom_text(aes(x=applicant_sex_name, y=1,
+                label = paste(PercentGender, "%", sep= "")),
+            hjust = -.1, vjust = .5, size = 5, col="black", fontface = "bold")+
+  labs(x= "Gender", y= "Percentage of Gender to Loan Actions Taken",
+       title = "Gender Count") +
+  scale_y_continuous(labels = scales :: comma)+
+  coord_flip()
+```
+
+Within the gender data, we can find that male applies for loan in much higher rate than female.
+
+##Race dependencies on Action Taken
+We explore the data to see how race plays a role in loan applicants.
+
+```{r, message=FALSE, warning=FALSE}
+MortgageRace <- mortgage_refine %>%
+  group_by(applicant_race_name_1) %>%
+  summarise(SummaryRace = n()) %>%
+  mutate(PercentageRace = round(SummaryRace/sum(SummaryRace)*100)) %>%
+  subset(applicant_race_name_1 != "Information not provided by applicant in mail, Internet, or telephone application") %>%
+  subset(applicant_race_name_1 != "Not applicable")
+
+ggplot(MortgageRace, aes(x= reorder(applicant_race_name_1, SummaryRace), y= SummaryRace)) +
+  scale_y_continuous(labels = scales :: comma)+
+  geom_bar(stat="identity", col="white", fill = "yellow")+
+  geom_text(aes(x=applicant_race_name_1, y=1,
+                label = paste(PercentageRace,"%", sep= "")),
+            hjust = -.1, vjust = .5, size = 3, col="black", fontface = "bold")+
+  labs(x= "Race", y = "Percentage of Total Action taken by Race", title = "Race Count") +
+  coord_flip()
+```
+
+This plot clearly shows that the majority of the loan applicants are "White" in NY.
+
+If we dive into how each Race compare to their loan status is, we get:
+
+```{r, message= FALSE, warning= FALSE}
+MortgageRace1 <- mortgage_refine %>%
+  group_by(applicant_race_name_1) %>%
+  summarise(SummaryRace1 = n()) %>%
+  subset(applicant_race_name_1 != "Information not provided by applicant in mail, Internet, or telephone application") %>%
+  subset(applicant_race_name_1 != "Not applicable")
+  
+MortgageRaceAT <- mortgage_refine %>%
+  group_by(action_taken_name, applicant_race_name_1) %>%
+  summarise(SummaryRaceAT = n()) %>%
+  subset(applicant_race_name_1 != "Information not provided by applicant in mail, Internet, or telephone application") %>%
+  subset(applicant_race_name_1 != "Not applicable")
+
+MortgageRace_Status <- merge(MortgageRaceAT, MortgageRace1) %>%
+  mutate(percentage = (SummaryRaceAT/SummaryRace1)*100)
+
+ ggplot(MortgageRace_Status, aes(x = reorder(action_taken_name, percentage), 
+                                    y = percentage)) +
+  geom_bar(stat='identity',colour="white", fill ="yellow") +
+  facet_wrap(~ applicant_race_name_1) +
+  geom_text(aes(x = action_taken_name, y = 1, label = paste(round(percentage), "%", sep="")),
+            hjust=-.1, vjust=.5, size = 3, colour = 'black',
+            fontface = 'bold') +
+  labs(x = 'Action', y = 'Percentage Action Taken', title = 'Race and Loan Actions') +
+  coord_flip()
+```
+
+Once we separate to each race and their respective Loan actions, we can clearly see in more detail how the results were. **White and Asian** has **~68%** loan origination, while the others, American-Indian/Alaskan/Black-African American/Hawaiian only receives **47%** loan origination.
+
+
+
+##Income to Loan Origination
+```{r, message=FALSE, warning=FALSE}
+
+actionoriginated = "Loan originated"
+
+mortgage_refine %>%
+  filter(action_taken_name == actionoriginated ) %>%
+ggplot(aes(applicant_income_000s)) +
+  scale_x_continuous(limits = c(0, 400),breaks=seq(0,400,50) ) +
+  geom_histogram(binwidth = 10) +
+  labs(x = 'Income by 000s', y = 'Total count', title = 'Applicant income vs. Loan originated')
+
+```
+
+Most income that has **Loan Originated** ranges around **$55K to $75K**.
+
+##Property
+
+###Loan Purpose Types
+We will look in to the various types of loans applied
+
+```{r, message=FALSE, warning=FALSE}
+MortgagePurpose <- mortgage_refine %>%
+  group_by(loan_purpose_name) %>%
+  summarise(SummaryPurpose = n()) %>%
+  mutate(PercentPurpose = round(SummaryPurpose/sum(SummaryPurpose)*100)) %>%
+  arrange(desc(SummaryPurpose))
+
+ggplot(MortgagePurpose, aes(x= reorder(loan_purpose_name,SummaryPurpose), y= SummaryPurpose)) +
+  geom_bar(stat="identity", col="white", fill = fillColor) +
+  geom_text(aes(x=loan_purpose_name, y=1,
+                label = paste(PercentPurpose,"%", sep= "")),
+            hjust = -.1, vjust = .5, size = 5, col="black", fontface = "bold")+
+  labs(x= "Loan Purpose", y= "Total Loan Purpose Count",
+       title = "Loan Purpose Count") +
+  coord_flip()
+```
+
+Loan Applicants apply for loan in 3 types, (in descending count)
+
+**Home Purchase** - 52%
+**Refinancint** - 37%
+**Home Improvement** - 11%
+
+###Action Taken by County
+We will take the top 10 most loan applied county, as this shows where the most sought-after county will be.
+``` {r, message=FALSE, warning=FALSE}
+MortgageCounty <- mortgage_refine %>%
+  group_by(county_name) %>%
+  summarise(SummaryCounty = n()) %>%
+  mutate(PercentCounty = round(SummaryCounty/sum(SummaryCounty)*100))%>%
+  arrange(desc(SummaryCounty)) %>%
+    head(10)
+
+ggplot(MortgageCounty, aes(x= reorder(county_name,SummaryCounty), y= SummaryCounty)) +
+  geom_bar(stat="identity", col="white", fill = fillColor) +
+  geom_text(aes(x=county_name, y=1,
+                label = paste(SummaryCounty, sep= "")),
+            hjust = -.1, vjust = .5, size = 3, col="black", fontface = "bold")+
+  labs(x= "Counties", y= "Total County Count",
+       title = "County Count") +
+  scale_y_continuous(labels = scales :: comma)+
+  coord_flip()
+```
+
+We can see that 7 out of 10 top 10 counties all fall near New York City which does make sense as it is the most highly populated region in state NY. 
+
+###Property Types
+```{r, message=FALSE, warning= FALSE}
+MortgagePropertyType <- mortgage_refine %>%
+  group_by(property_type_name) %>%
+  summarise(SummaryPropertyType = n()) %>%
+  mutate(PercentPropertyType = round(SummaryPropertyType/sum(SummaryPropertyType)*100)) %>%
+  arrange(desc(SummaryPropertyType))
+
+ggplot(MortgagePropertyType, aes(x= property_type_name, y= SummaryPropertyType)) +
+  geom_bar(stat="identity", col="white", fill = fillColor) +
+  geom_text(aes(x=property_type_name, y=1,
+                label = paste(PercentPropertyType, "%", sep= "")),
+            hjust = -.1, vjust = .5, size = 4, col="black", fontface = "bold")+
+  labs(x= "Property Types", y= "Total Property Type Count",
+       title = "Property Type Count") +
+  scale_y_continuous(labels = scales :: comma)+
+  coord_flip()
+```
+
+The Previous county analysis showed that the highest applied counties mostly fall within the New York city, so this **property type** analysis actually is a curveball. Within such densely populated area per square mile, we expect to see Mutifamily dwelling to be in a much higher percentage. As the data shows, **97%** of applicants are applying for a one-to-four family dwelling.
+
+#Predictive Modeling
+We will predict what the top qualities it takes to reach **Loan Originated** status.
+```{r, messsage=FALSE, warning=FALSE}
+
+cartCols = c("action_taken","applicant_ethnicity",        
+                 "applicant_income_000s","applicant_race_1","co_applicant_ethnicity",
+                 "co_applicant_sex", "county_code","hoepa_status","lien_status",
+                 "loan_purpose","loan_type","msamd",                                              
+                 "owner_occupancy","preapproval",
+                 "property_type","purchaser_type","loan_amount_000s")
+
+
+mortgage_cart <- mortgage_refine %>% select(cartCols) %>%
+  mutate(isLoanOriginated = FALSE)  %>%
+  mutate(isLoanOriginated = replace(isLoanOriginated, action_taken == 1, TRUE)) %>%
+  select(-action_taken)
+mortgage_cart <- na.omit(mortgage_cart)
+mortgage_cart$applicant_ethnicity = as.factor(mortgage_cart$applicant_ethnicity)
+mortgage_cart$applicant_race_1 = as.factor(mortgage_cart$applicant_race_1)
+mortgage_cart$co_applicant_ethnicity = as.factor(mortgage_cart$co_applicant_ethnicity)
+mortgage_cart$co_applicant_sex = as.factor(mortgage_cart$co_applicant_sex)
+mortgage_cart$hoepa_status =  as.factor(mortgage_cart$hoepa_status)
+mortgage_cart$lien_status =  as.factor(mortgage_cart$lien_status)
+mortgage_cart$loan_purpose =  as.factor(mortgage_cart$loan_purpose)
+mortgage_cart$loan_type =  as.factor(mortgage_cart$loan_type)
+mortgage_cart$owner_occupancy =  as.factor(mortgage_cart$owner_occupancy)  
+mortgage_cart$preapproval =  as.factor(mortgage_cart$preapproval)  
+mortgage_cart$property_type =  as.factor(mortgage_cart$property_type) 
+mortgage_cart$purchaser_type =  as.factor(mortgage_cart$purchaser_type) 
+
+
+```
+
+##Logistic Regression Modeling
+```{r, messsage=FALSE, warning=FALSE, echo=FALSE}
+set.seed(3000)
+split = sample.split(mortgage_cart$isLoanOriginated, SplitRatio = 0.7)
+Train = subset(mortgage_cart, split==TRUE, na.omit=T)
+Test = subset(mortgage_cart, split==FALSE, na.omit = T)
+
+mortGLM = glm(isLoanOriginated ~ ., data=Test, family = binomial)
+
+predictGLM <- predict(mortGLM, type = 'response')
+summary(predictGLM)
+
+resultGLM <- predict(mortGLM, data= Test, type='response')
+resultGLM <- ifelse(resultGLM > 0.5,1,0)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+misClasificError <- mean(resultGLM != Test$isLoanOriginated)
+print(paste('Accuracy',1-misClasificError))
+```
+
+With the Logistic Regression Model, we see that the selected data has an accuracy of 84%. Let us proceed to the CART model.
+
+
+##CART Decision Tree Modeling
+
+```{r, messsage=FALSE, warning=FALSE}
+set.seed(3000)
+split = sample.split(mortgage_cart$isLoanOriginated, SplitRatio = 0.7)
+Train = subset(mortgage_cart, split==TRUE, na.omit=T)
+Test = subset(mortgage_cart, split==FALSE, na.omit = T)
+
+# CART model
+mortgagetree = rpart(isLoanOriginated ~ ., method="class", data = Train, control=rpart.control(minbucket=6))
+
+prp(mortgagetree)
+```
+
+With the Decision Tree, the most important categories for **Loan Origination** is visible. 
+From the top and descending in importance; Lien Status, Purchaser Type, Loan Purpose, Loan Type, Applicant Income, then Applicant Race. 
+
+
+##ROC and AUC model
+We will check our accuracy based on ROC Curve Model.
+```{r}
+#CART prediction
+
+PredictCART = predict(mortgagetree, newdata = Test, type = "class")
+
+# ROCR Prediction
+PredictROC = predict(mortgagetree, newdata = Test)
+pred = prediction(PredictROC[,2], Test$isLoanOriginated)
+perf = performance(pred, "tpr", "fpr")
+plot(perf)
+```
+
+Using the same ROC curve, we find our AUC accuracy rate.
+```{r}
+auc = performance(pred, measure='auc')
+auc = auc@y.values[[1]]
+
+auc
+```
+
